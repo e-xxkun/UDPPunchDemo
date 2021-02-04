@@ -1,104 +1,170 @@
 import java.io.IOException;
-import java.net.*;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketAddress;
+import java.net.SocketException;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * @author xxkun
  * @creed Awaken the Giant Within
- * @description: 中转服务器
+ * @description: relay server
  * @date 2021-01-30 10:23
  */
 public class Server {
 
-    private static final int UDP_MSG_INBUFF_LEN = 10240;
-    private static final byte[] UDP_BUF_TMP = new byte[1];
-    public static Map<String, DatagramPacket> clientPool;
+    private final int HEARTBEAT_INTERVAL = 10 * 1000;   // Heartbeat interval (ms)
 
-    public static void UDPReceiveLoop(DatagramSocket sock) throws IOException {
-        while (true) {
-            byte[] inBuff = new byte[UDP_MSG_INBUFF_LEN];
-            DatagramPacket inPacket = new DatagramPacket(inBuff, inBuff.length);
-            sock.receive(inPacket);
-//            System.out.println("UDP Check " + new Date().toString());
+    private Map<String, ClientInfo> clientPool;
+    private boolean stop = false;
+    private DatagramSocket server;
 
-            Message msg = Message.msgUnpack(inPacket.getData());
-            if (!msg.head.magic.equals(Message.MSG_MAGIC) || msg.body == null) {
-                System.out.println("Invalid message: " + msg.head.magic + msg.head.type + msg.body);
-                continue;
-            }
-            onMessage(sock, inPacket, msg);
-        }
-    }
-
-    private static void onMessage(DatagramSocket sock, DatagramPacket from, Message msg) {
-        System.out.println("RECV FROM " + from.getSocketAddress() + ":" + msg.head.type.getCode() + " -> " + msg.body);
-        switch (msg.head.type) {
-            case MTYPE_LOGIN:
-                if (!clientPool.containsKey(from.getSocketAddress())) {
-                    System.out.println("logged in " + from.getSocketAddress());
-                    Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, "Login success!");
-                } else {
-                    System.out.println("failed to login " + from.getSocketAddress());
-                    Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, "Login failed");
-                }
-                break;
-            case MTYPE_LOGOUT:
-                if (clientPool.remove(from.getSocketAddress()) != null) {
-                    System.out.println("logged out " + from.getSocketAddress());
-                    Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, "Logout success");
-                } else {
-                    System.out.println("failed to logout " + from.getSocketAddress());
-                    Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, "Logout failed");
-                }
-                break;
-            case MTYPE_LIST:
-                System.out.println("quering list " + from.getSocketAddress());
-                String text = clientPool.keySet().toString();
-                Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, text);
-                break;
-            case MTYPE_PUNCH:
-                DatagramPacket other = dataPacketFromString(msg.body);
-                System.out.println("punching to " + other.getSocketAddress());
-                Message.udpSendText(sock, other, Message.MessageType.MTYPE_PUNCH, from.getSocketAddress().toString().substring(1));
-                Message.udpSendText(sock, from, Message.MessageType.MTYPE_TEXT, "punch request sent");
-                break;
-            case MTYPE_PING:
-                Message.udpSendText(sock, from, Message.MessageType.MTYPE_PONG, null);
-                break;
-            case MTYPE_PONG:
-                break;
-            default:
-                Message.udpSendText(sock, from, Message.MessageType.MTYPE_REPLY, "Unkown command");
-                break;
-        }
-    }
-
-    public static DatagramPacket dataPacketFromString(String body) {
-        String[] pSplit = body.split(":");
-        String host = pSplit[0];
-        int port = Integer.valueOf(pSplit[1]);
-        SocketAddress receiveAddress = new InetSocketAddress(host, port);
-        byte[] buf = UDP_BUF_TMP;
-        return new DatagramPacket(buf, buf.length, receiveAddress);
-    }
-
-    public static void main(String[] args) {
-        int port = 8888;
-        DatagramSocket server;
+    public void start(int port) {
         clientPool = new HashMap<>();
         try {
             server = new DatagramSocket(port);
             System.out.println("Server start on " + server.getLocalSocketAddress());
-            UDPReceiveLoop(server);
+            new UDPReceiveLoopThread().start();
+            new HeartbeatThread().start();
         } catch (SocketException e) {
             e.printStackTrace();
-        } catch (IOException e) {
-            e.printStackTrace();
+            stop = true;
         }
-        clientPoolDestroy(clientPool);
     }
 
-    private static void clientPoolDestroy(Map<String, DatagramPacket> clientPool) {
+    private void onMessage(SocketAddress from, Message msg) {
+//        System.out.println("RECV FROM Client " + ClientInfo.getAddressStr(from) + ":" + msg.getType().getCode() + " -> " + msg.getBody().trim());
+        switch (msg.getType()) {
+            case MSGT_LOGIN:
+                if (!clientPool.containsKey(ClientInfo.getAddressStr(from))) {
+                    clientPool.put(ClientInfo.getAddressStr(from), new ClientInfo(from));
+                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " logged in");
+                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Login success!");
+                } else {
+                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " failed to login");
+                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Login failed");
+                }
+                break;
+            case MSGT_LOGOUT:
+                if (clientPool.remove(ClientInfo.getAddressStr(from)) != null) {
+                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " logged out");
+                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Logout success");
+                } else {
+                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " failed to logout");
+                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Logout failed");
+                }
+                break;
+            case MSGT_LIST:
+                System.out.println("Client " + ClientInfo.getAddressStr(from) + " query list ");
+                String fromStr = ClientInfo.getAddressStr(from);
+                String text = clientPool.keySet().stream().filter(s -> !s.equals(fromStr)).collect(Collectors.joining(","));
+                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "[" + text + "]");
+                break;
+            case MSGT_PUNCH:
+                SocketAddress other = TransferUtil.getSocketAddressFromString(msg.getBody());
+                if (other == null) {
+                    System.out.println("Address format error");
+                    break;
+                }
+                System.out.println("Client " + ClientInfo.getAddressStr(from) + " punching to " + ClientInfo.getAddressStr(other));
+                TransferUtil.udpSendText(server, other, Message.MessageType.MSGT_PUNCH, ClientInfo.getAddressStr(from));
+                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_TEXT, "punch request sent");
+                break;
+            case MSGT_HEARTBEAT:
+                clientPool.get(ClientInfo.getAddressStr(from)).setAlive(true);
+                System.out.println("Client " + ClientInfo.getAddressStr(from) + " alive");
+                break;
+            default:
+                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Unknown command");
+                break;
+        }
+    }
+
+    private class HeartbeatThread extends Thread {
+        @Override
+        public void run() {
+            while (!stop) {
+                try {
+                    sleep(HEARTBEAT_INTERVAL);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    stop = true;
+                    break;
+                }
+                Iterator<ClientInfo> iterator = clientPool.values().iterator();
+                while (iterator.hasNext()) {
+                    ClientInfo client = iterator.next();
+                    if (client.isAlive()) {
+                        TransferUtil.udpSendText(server, client.getSocketAddress(), Message.MessageType.MSGT_HEARTBEAT, null);
+                        client.setAlive(false);
+                    } else {
+                        System.out.println("Client " + ClientInfo.getAddressStr(client.getSocketAddress()) + " logout");
+                        iterator.remove();
+                    }
+                }
+            }
+        }
+    }
+
+    private class UDPReceiveLoopThread extends Thread {
+        @Override
+        public void run() {
+            while (!stop) {
+                byte[] inBuff = new byte[Message.UDP_MSG_IN_BUFF_LEN];
+                DatagramPacket packet = new DatagramPacket(inBuff, inBuff.length);
+                try {
+                    server.receive(packet);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                    stop = true;
+                    break;
+                }
+                String inDataStr = new String(packet.getData());
+                Message msg = Message.msgUnpack(inDataStr);
+                if (msg == null) {
+                    System.out.println("Invalid message from Client " + ClientInfo.getAddressStr(packet.getSocketAddress()) + ":" + inDataStr);
+                    continue;
+                }
+                onMessage(packet.getSocketAddress(), msg);
+            }
+        }
+    }
+
+    private static class ClientInfo {
+        private final SocketAddress socketAddress;
+        private boolean alive;
+
+        public ClientInfo(SocketAddress address) {
+            socketAddress = address;
+            alive = true;
+        }
+
+        public SocketAddress getSocketAddress() {
+            return socketAddress;
+        }
+
+        public boolean isAlive() {
+            return alive;
+        }
+
+        public void setAlive(boolean alive) {
+            this.alive = alive;
+        }
+
+        public static String getAddressStr(SocketAddress address) {
+            return address.toString().substring(1);
+        }
+    }
+
+    public static void main(String[] args) {
+        if (args.length != 1) {
+            System.out.println("Usage: java " + Server.class.getName() + " <port>\n");
+            return;
+        }
+        int port = Integer.parseInt(args[0]);
+        new Server().start(port);
     }
 }

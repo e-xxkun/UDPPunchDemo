@@ -1,157 +1,145 @@
 import java.io.IOException;
-import java.net.*;
+
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketAddress;
+import java.net.SocketException;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Scanner;
 
 /**
  * @author xxkun
  * @creed Awaken the Giant Within
- * @description: P2P客户端
+ * @description: P2P Client
  * @date 2021-01-30 20:02
  */
+
 public class Client {
 
-    private static final byte[] UDP_BUF_TMP = new byte[1];
-    public static Map<String, DatagramPacket> clientList;
-    public static DatagramPacket server;
-    public static DatagramSocket client;
+    private Map<String, SocketAddress> clientList;
+    private SocketAddress server;
+    private DatagramSocket local;
+    private boolean quit = false;
 
-    public static boolean quit = false;
-
-    public static void main(String[] args) {
-
-//        String host = "106.14.249.225";
-        String host = "127.0.0.1";
-        int port = 8888;
-        byte[] buf = new byte[1024];
-        SocketAddress receiveAddress = new InetSocketAddress(host, port);
-        server = new DatagramPacket(buf, buf.length, receiveAddress);
+    public void start(String address) {
+        server = TransferUtil.getSocketAddressFromString(address);
         clientList = new HashMap<>();
-
         try {
-            client = new DatagramSocket();
-            System.out.println("UDP start");
-
+            local = new DatagramSocket();
+            System.out.println("UDP start on " + local.getLocalSocketAddress());
         } catch (SocketException e) {
             e.printStackTrace();
+            return;
         }
-
-        new HeartbeatThread().start();
         new ReceiveThread().start();
         new ConsoleThread().start();
     }
 
-    public static class HeartbeatThread extends Thread {
-
-        @Override
-        public void run() {
-            Message ping = new Message();
-            ping.head.magic = Message.MSG_MAGIC;
-            ping.head.type = Message.MessageType.MTYPE_PING;
-            ping.body = null;
-            while (!quit) {
-                try {
-                    sleep(10 * 1000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-                Message.udpSendMsg(client, server, ping);
-                for (DatagramPacket peer : clientList.values()) {
-                    Message.udpSendMsg(client, peer, ping);
-                }
+    private void onMessage(SocketAddress from, Message msg) {
+//        System.out.println("RECV FROM Client " + from + ":" + msg.getType().getCode() + " -> " + msg.getBody());
+        if (server.toString().equals(from.toString())) {
+            switch (msg.getType()) {
+                case MSGT_PUNCH:
+                    SocketAddress peer = TransferUtil.getSocketAddressFromString(msg.getBody());
+                    System.out.println("Client " + peer + " on call, replying...");
+                    TransferUtil.udpSendText(local, peer, Message.MessageType.MSGT_REPLY, null);
+                    break;
+                case MSGT_REPLY:
+                    System.out.println("Server " + server + ": " + msg.getBody());
+                    break;
+                case MSGT_HEARTBEAT:
+                    TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_HEARTBEAT, null);
+                    break;
             }
-            System.out.println("HeartbeatThread quit");
+            return;
+        }
+        switch (msg.getType()) {
+            case MSGT_TEXT:
+                System.out.println("Peer " + from + ": " + msg.getBody());
+                break;
+            case MSGT_REPLY:
+                System.out.println("Peer " + from + " replied, you can talk now" );
+                clientList.put(from.toString(), from);
+                TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_TEXT, "connect success");
+                break;
+            case MSGT_PUNCH:
+                TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_TEXT, "I see you");
+                break;
+            default:
+                break;
         }
     }
-
-    public static class ReceiveThread extends Thread {
-
-
-        private static void onMessage(DatagramPacket from, Message msg) {
-//            System.out.println("RECV FROM " + from.getSocketAddress() + ":" + msg.head.type.getCode() + " -> " + msg.body);
-            if (server.getSocketAddress().toString().equals(from.getSocketAddress().toString())) {
-                switch (msg.head.type) {
-                    case MTYPE_PUNCH:
-                        DatagramPacket peer = dataPacketFromString(msg.body);
-                        System.out.println(peer.getSocketAddress() + " on call, replying...");
-                        Message.udpSendText(client, peer, Message.MessageType.MTYPE_REPLY, null);
-                        break;
-                    case MTYPE_REPLY:
-                        System.out.println("SERVER: " + msg.body);
-                        break;
-                }
-                return;
-            }
-            switch (msg.head.type) {
-                case MTYPE_TEXT:
-                    System.out.println("Peer " + from.getSocketAddress() + ": " + msg.body);
-                    break;
-                case MTYPE_REPLY:
-                    System.out.println("Peer replied, you can talk now" + from.getSocketAddress());
-                    clientList.put(from.getSocketAddress().toString(), from);
-                    break;
-                case MTYPE_PUNCH:
-                    Message.udpSendText(client, from, Message.MessageType.MTYPE_TEXT, "I SEE YOU");
-                    break;
-                case MTYPE_PING:
-                    Message.udpSendText(client, from, Message.MessageType.MTYPE_PONG, null);
-                    break;
-                default:
-                    break;
-            }
-        }
-
+    
+    public class ReceiveThread extends Thread {
         @Override
         public void run() {
             while (!quit) {
+                byte[] buff = new byte[Message.UDP_MSG_IN_BUFF_LEN];
+                DatagramPacket packet = new DatagramPacket(buff, buff.length);
                 try {
-                    byte[] buf = new byte[1024];
-                    DatagramPacket peer = new DatagramPacket(buf, buf.length);;
-                    client.receive(peer);
-                    Message msg = Message.msgUnpack(peer.getData());
-                    if (!msg.head.magic.equals(Message.MSG_MAGIC) || msg.body == null) {
-                        System.out.println("Invalid message" + msg.head.magic + msg.head.type + msg.body);
-                        continue;
-                    }
-                    onMessage(peer, msg);
+                    local.receive(packet);
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
+                String inDataStr = new String(packet.getData());
+                Message msg = Message.msgUnpack(inDataStr);
+                if (msg == null) {
+                    System.out.println("Invalid message from Client " + packet.getSocketAddress() + ":" + inDataStr);
+                    continue;
+                }
+                onMessage(packet.getSocketAddress(), msg);
             }
             System.out.println("ReceiveThread quit");
         }
     }
 
-    public static class ConsoleThread extends Thread {
+    public class ConsoleThread extends Thread {
         @Override
         public void run() {
             Scanner scanner = new Scanner(System.in);
             while (!quit) {
-                String[] line = scanner.nextLine().split(" ");
-                switch (line[0]) {
+                String[] cmd = scanner.nextLine().split(" ");
+                switch (cmd[0]) {
                     case "list":
-                        Message.udpSendText(client, server, Message.MessageType.MTYPE_LIST, null);
+                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LIST, null);
+                        break;
+                    case "peer":
+                        System.out.println(clientList.values().toString());
                         break;
                     case "login":
-                        Message.udpSendText(client, server, Message.MessageType.MTYPE_LOGIN, null);
+                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGIN, null);
                         break;
                     case "logout":
-                        Message.udpSendText(client, server, Message.MessageType.MTYPE_LOGOUT, null);
-                        break;
-                    case "punch":
-                        DatagramPacket peer = dataPacketFromString(line[1]);
-                        System.out.println("punching " + peer.getSocketAddress());
-                        Message.udpSendText(client, peer, Message.MessageType.MTYPE_PUNCH, null);
-                        Message.udpSendText(client, server, Message.MessageType.MTYPE_PUNCH, line[1]);
+                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGOUT, null);
                         break;
                     case "send":
-                        Message.udpSendText(client, dataPacketFromString(line[1]), Message.MessageType.MTYPE_TEXT, line[2]);
+                        if (cmd.length > 2) {
+                            TransferUtil.udpSendText(local, TransferUtil.getSocketAddressFromString(cmd[1]), Message.MessageType.MSGT_TEXT, cmd[2]);
+                        } else {
+                            System.out.println("Parameter error");
+                        }
+                        break;
+                    case "punch":
+                        if (cmd.length > 1) {
+                            SocketAddress peer = TransferUtil.getSocketAddressFromString(cmd[1]);
+                            if (peer == null) {
+                                System.out.println("Address format error");
+                                break;
+                            }
+                            System.out.println("punching " + peer);
+                            TransferUtil.udpSendText(local, peer, Message.MessageType.MSGT_PUNCH, null);
+                            TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_PUNCH, cmd[1]);
+                        } else {
+                            System.out.println("Parameter error");
+                        }
                         break;
                     case "quit":
-                        Message.udpSendText(client, server, Message.MessageType.MTYPE_LOGOUT, null);
+                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGOUT, null);
                         quit = true;
+                        break;
+                    case "help":
+                        print_help();
                         break;
                     default:
                         System.out.println("Unknown command");
@@ -160,12 +148,42 @@ public class Client {
         }
     }
 
-    public static DatagramPacket dataPacketFromString(String body) {
-        String[] pSplit = body.split(":");
-        String host = pSplit[0];
-        int port = Integer.valueOf(pSplit[1]);
-        SocketAddress receiveAddress = new InetSocketAddress(host, port);
-        byte[] buf = UDP_BUF_TMP;
-        return new DatagramPacket(buf, buf.length, receiveAddress);
+    public static void main(String[] args) {
+        String address;
+        if (args.length == 1) {
+            address = args[0];
+        } else {
+            System.out.println("Usage: java " + Client.class.getName() + " <host>:<port>");
+            return;
+        }
+        new Client().start(address);
+    }
+
+    public static void print_help() {
+        String help_message =
+            "Usage:" +
+            "\n\n login" +
+            "\n     login to server so that other peer(s) can see you" +
+            "\n\n logout" +
+            "\n     logout from server" +
+            "\n\n list" +
+            "\n     list logined peers" +
+            "\n\n peer" +
+            "\n     list punched peers" +
+            "\n\n punch host:port" +
+            "\n     punch a hole through UDP to [host:port]" +
+            "\n     host:port must have been logged in to server" +
+            "\n     Example:" +
+            "\n     >>> punch 9.8.8.8:53" +
+            "\n\n send host:port data" +
+            "\n     send [data] to peer [host:port] through UDP protocol" +
+            "\n     the other peer could receive your message if UDP hole punching succeed" +
+            "\n     Example:" +
+            "\n     >>> send 8.8.8.8:53 hello" +
+            "\n\n help" +
+            "\n     print this help message" +
+            "\n\n quit" +
+            "\n     logout and quit this program";
+        System.out.println(help_message);
     }
 }

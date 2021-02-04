@@ -1,71 +1,62 @@
-import java.io.IOException;
-import java.net.DatagramPacket;
-import java.net.DatagramSocket;
-
 /**
  * @author xxkun
  * @creed Awaken the Giant Within
- * @description: UDP消息
+ * @description: UDP Message
  * @date 2021-01-30 16:50
  */
+
 public class Message {
 
-    public MessageHead head = new MessageHead();
-    public String body;
+    public static final int UDP_MSG_IN_BUFF_LEN = 1024;
+    private static final String MSG_HEADER = "UDP";
+    private static final String MSG_SPLIT = "-";
 
-    public static final String MSG_MAGIC = "XXK";
+    private final String body;
+    private final MessageType type;
 
-    public static Message msgUnpack(byte[] buf) {
-        Message m = new Message();
-        String inData = new String(buf);
-        String[] pSplit = inData.split("-");
-        m.head.magic = pSplit[0];
-        if (!m.head.magic.equals(MSG_MAGIC)) {
-            return m;
-        }
-        m.head.type = MessageType.create(pSplit[1]);
-        m.body = pSplit[2];
-        return m;
+    public Message(String body, MessageType type) {
+        this.body = body;
+        this.type = type;
     }
 
-    public static void udpSendText(DatagramSocket sock, DatagramPacket peer, MessageType type, String text) {
-        Message m = new Message();
-        m.head.magic = MSG_MAGIC;
-        m.head.type = type;
-        m.body = text == null ? "NULL" : text;
-        udpSendMsg(sock, peer, m);
+    public static Message msgUnpack(String msgStr) {
+        String[] pSplit = msgStr.split(MSG_SPLIT);
+        if (pSplit.length >= 2) {
+            String header = pSplit[0];
+            if (MSG_HEADER.equals(header)) {
+                MessageType type = MessageType.create(pSplit[1]);
+                String body = null;
+                if (pSplit.length > 2) {
+                    body = pSplit[2];
+                }
+                return new Message(body, type);
+            }
+        }
+        return null;
     }
 
-    public static void udpSendMsg(DatagramSocket sock, DatagramPacket peer, Message m) {
-        peer.setData(m.toString().getBytes());
-        try {
-            sock.send(peer);
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    public String getBody() {
+        return body;
+    }
+
+    public MessageType getType() {
+        return type;
     }
 
     @Override
     public String toString() {
-        return head.magic + "-" + head.type.getCode() + "-" + body + "-";
-    }
-
-    public class MessageHead {
-        public String magic;
-        public MessageType type;
+        return MSG_HEADER + MSG_SPLIT + type.getCode() + MSG_SPLIT + (body == null ? "" : body + MSG_SPLIT);
     }
 
     public enum MessageType {
-        MTYPE_LOGIN("LOGIN"),
-        MTYPE_LOGOUT("LOGOUT"),
-        MTYPE_LIST("LIST"),
-        MTYPE_PUNCH("PUNCH"),
-        MTYPE_PING("PING"),
-        MTYPE_PONG("PONG"),
-        MTYPE_REPLY("REPLY"),
-        MTYPE_TEXT("TEXT"),
-        MTYPE_UNKNOW("UNKNOW"),
-        MTYPE_END("END");
+        MSGT_LOGIN("LOGIN"),
+        MSGT_LOGOUT("LOGOUT"),
+        MSGT_LIST("LIST"),
+        MSGT_PUNCH("PUNCH"),
+        MSGT_HEARTBEAT("HEARTBEAT"),
+        MSGT_REPLY("REPLY"),
+        MSGT_TEXT("TEXT"),
+        MSGT_UNKNOWN("UNKNOWN");
 
         String code;
 
@@ -78,13 +69,13 @@ public class Message {
         }
 
         public static MessageType create(String val) {
-            MessageType[] units = MessageType.values();
-            for (MessageType unit : units) {
-                if (unit.getCode().equals(val)) {
-                    return unit;
+            MessageType[] types = MessageType.values();
+            for (MessageType type : types) {
+                if (type.getCode().equals(val)) {
+                    return type;
                 }
             }
-            return MTYPE_UNKNOW;
+            return MSGT_UNKNOWN;
         }
     }
 }
