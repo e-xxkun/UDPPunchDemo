@@ -5,7 +5,6 @@ import java.net.DatagramSocket;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Scanner;
 
@@ -16,7 +15,7 @@ import java.util.Scanner;
  * @date 2021-01-30 20:02
  */
 
-public class Client {
+public class Client implements UDPReceiveLoopThread.Status {
 
     private static final long HEARTBEAT_INTERVAL = 10 * 1000;
     private Map<String, SocketAddress> clientList;
@@ -36,18 +35,18 @@ public class Client {
             return;
         }
         heartbeat = new HeartbeatThread();
-        new ReceiveThread().start();
+        new UDPReceiveLoopThread(local, this).start();
         new ConsoleThread().start();
     }
 
-    private void onMessage(SocketAddress from, Message msg) {
+    public void onMessage(SocketAddress from, Message msg) {
 //        System.out.println("RECV FROM Client " + from + ":" + msg.getType().getCode() + " -> " + msg.getBody());
         if (server.toString().equals(from.toString())) {
             switch (msg.getType()) {
                 case MSGT_PUNCH:
                     SocketAddress peer = TransferUtil.getSocketAddressFromString(msg.getBody());
                     System.out.println("Client " + peer + " on call, replying...");
-                    TransferUtil.udpSendText(local, peer, Message.MessageType.MSGT_REPLY, null);
+                    TransferUtil.udpSendMsg(local, peer, Message.MessageType.MSGT_REPLY, null);
                     break;
                 case MSGT_REPLY:
                     System.out.println("Server " + server + ": " + msg.getBody());
@@ -68,37 +67,19 @@ public class Client {
             case MSGT_REPLY:
                 System.out.println("Peer " + from + " replied, you can talk now" );
                 clientList.put(from.toString(), from);
-                TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_TEXT, "connect success");
+                TransferUtil.udpSendMsg(local, from, Message.MessageType.MSGT_TEXT, "connect success");
                 break;
             case MSGT_PUNCH:
-                TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_TEXT, "I see you");
+                TransferUtil.udpSendMsg(local, from, Message.MessageType.MSGT_TEXT, "I see you");
                 break;
             default:
                 break;
         }
     }
 
-    public class ReceiveThread extends Thread {
-        @Override
-        public void run() {
-            while (!quit) {
-                byte[] buff = new byte[Message.UDP_MSG_IN_BUFF_LEN];
-                DatagramPacket packet = new DatagramPacket(buff, buff.length);
-                try {
-                    local.receive(packet);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                String inDataStr = new String(packet.getData());
-                Message msg = Message.msgUnpack(inDataStr);
-                if (msg == null) {
-                    System.out.println("Invalid message from Client " + packet.getSocketAddress() + ":" + inDataStr);
-                    continue;
-                }
-                onMessage(packet.getSocketAddress(), msg);
-            }
-            System.out.println("ReceiveThread quit");
-        }
+    @Override
+    public boolean isStop() {
+        return quit;
     }
 
     public class ConsoleThread extends Thread {
@@ -109,21 +90,21 @@ public class Client {
                 String[] cmd = scanner.nextLine().split(" ");
                 switch (cmd[0]) {
                     case "list":
-                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LIST, null);
+                        TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LIST, null);
                         break;
                     case "peer":
                         System.out.println(clientList.values().toString());
                         break;
                     case "login":
-                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGIN, null);
+                        TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LOGIN, null);
                         break;
                     case "logout":
-                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGOUT, null);
+                        TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LOGOUT, null);
                         heartbeat.close();
                         break;
                     case "send":
                         if (cmd.length > 2) {
-                            TransferUtil.udpSendText(local, TransferUtil.getSocketAddressFromString(cmd[1]), Message.MessageType.MSGT_TEXT, cmd[2]);
+                            TransferUtil.udpSendMsg(local, TransferUtil.getSocketAddressFromString(cmd[1]), Message.MessageType.MSGT_TEXT, cmd[2]);
                         } else {
                             System.out.println("Parameter error");
                         }
@@ -136,14 +117,14 @@ public class Client {
                                 break;
                             }
                             System.out.println("punching " + peer);
-                            TransferUtil.udpSendText(local, peer, Message.MessageType.MSGT_PUNCH, null);
-                            TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_PUNCH, cmd[1]);
+                            TransferUtil.udpSendMsg(local, peer, Message.MessageType.MSGT_PUNCH, null);
+                            TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_PUNCH, cmd[1]);
                         } else {
                             System.out.println("Parameter error");
                         }
                         break;
                     case "quit":
-                        TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGOUT, null);
+                        TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LOGOUT, null);
                         quit = true;
                         break;
                     case "help":
@@ -163,7 +144,7 @@ public class Client {
             while (!quit && !stop) {
                 try {
                     sleep(HEARTBEAT_INTERVAL);
-                    TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_HEARTBEAT, null);
+                    TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_HEARTBEAT, null);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                     quit = true;

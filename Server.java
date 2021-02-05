@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * @description: relay server
  * @date 2021-01-30 10:23
  */
-public class Server {
+public class Server implements UDPReceiveLoopThread.Status {
 
     private static final long HEARTBEAT_INTERVAL = 10 * 1000;   // Heartbeat interval (ms)
 
@@ -28,7 +28,7 @@ public class Server {
         try {
             server = new DatagramSocket(port);
             System.out.println("Server start on " + server.getLocalSocketAddress());
-            new UDPReceiveLoopThread().start();
+            new UDPReceiveLoopThread(server, this).start();
             new HeartbeatThread().start();
         } catch (SocketException e) {
             e.printStackTrace();
@@ -36,33 +36,33 @@ public class Server {
         }
     }
 
-    private void onMessage(SocketAddress from, Message msg) {
-//        System.out.println("RECV FROM Client " + ClientInfo.getAddressStr(from) + ":" + msg.getType().getCode() + " -> " + msg.getBody().trim());
+    public void onMessage(SocketAddress from, Message msg) {
+//        System.out.println("RECV FROM Client " + getAddressStr(from) + ":" + msg.getType().getCode() + " -> " + msg.getBody().trim());
         switch (msg.getType()) {
             case MSGT_LOGIN:
-                if (!clientPool.containsKey(ClientInfo.getAddressStr(from))) {
-                    clientPool.put(ClientInfo.getAddressStr(from), new ClientInfo(from));
-                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " logged in");
-                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_LOGIN, null);
+                if (!clientPool.containsKey(getAddressStr(from))) {
+                    clientPool.put(getAddressStr(from), new ClientInfo(from));
+                    System.out.println("Client " + getAddressStr(from) + " logged in");
+                    TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_LOGIN, null);
                 } else {
-                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " failed to login");
-                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Login failed");
+                    System.out.println("Client " + getAddressStr(from) + " failed to login");
+                    TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_REPLY, "Login failed");
                 }
                 break;
             case MSGT_LOGOUT:
-                if (clientPool.remove(ClientInfo.getAddressStr(from)) != null) {
-                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " logged out");
-                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Logout success");
+                if (clientPool.remove(getAddressStr(from)) != null) {
+                    System.out.println("Client " + getAddressStr(from) + " logged out");
+                    TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_REPLY, "Logout success");
                 } else {
-                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " failed to logout");
-                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Logout failed");
+                    System.out.println("Client " + getAddressStr(from) + " failed to logout");
+                    TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_REPLY, "Logout failed");
                 }
                 break;
             case MSGT_LIST:
-                System.out.println("Client " + ClientInfo.getAddressStr(from) + " query list ");
-                String fromStr = ClientInfo.getAddressStr(from);
+                System.out.println("Client " + getAddressStr(from) + " query list ");
+                String fromStr = getAddressStr(from);
                 String text = clientPool.keySet().stream().filter(s -> !s.equals(fromStr)).collect(Collectors.joining(","));
-                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "[" + text + "]");
+                TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_REPLY, "[" + text + "]");
                 break;
             case MSGT_PUNCH:
                 SocketAddress other = TransferUtil.getSocketAddressFromString(msg.getBody());
@@ -70,21 +70,26 @@ public class Server {
                     System.out.println("Address format error");
                     break;
                 }
-                System.out.println("Client " + ClientInfo.getAddressStr(from) + " punching to " + ClientInfo.getAddressStr(other));
-                TransferUtil.udpSendText(server, other, Message.MessageType.MSGT_PUNCH, ClientInfo.getAddressStr(from));
-                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_TEXT, "punch request sent");
+                System.out.println("Client " + getAddressStr(from) + " punching to " + getAddressStr(other));
+                TransferUtil.udpSendMsg(server, other, Message.MessageType.MSGT_PUNCH, getAddressStr(from));
+                TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_TEXT, "punch request sent");
                 break;
             case MSGT_HEARTBEAT:
-                ClientInfo client = clientPool.get(ClientInfo.getAddressStr(from));
+                ClientInfo client = clientPool.get(getAddressStr(from));
                 if (client != null) {
                     client.setLastConnectDate(new Date());
-                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " alive");
+                    System.out.println("Client " + getAddressStr(from) + " alive");
                 }
                 break;
             default:
-                TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Unknown command");
+                TransferUtil.udpSendMsg(server, from, Message.MessageType.MSGT_REPLY, "Unknown command");
                 break;
         }
+    }
+
+    @Override
+    public boolean isStop() {
+        return stop;
     }
 
     private class HeartbeatThread extends Thread {
@@ -103,7 +108,7 @@ public class Server {
                 while (iterator.hasNext()) {
                     ClientInfo client = iterator.next();
                     if (now.getTime() - client.getLastConnectDate().getTime() > HEARTBEAT_INTERVAL) {
-                        System.out.println("Client " + ClientInfo.getAddressStr(client.getSocketAddress()) + " logout");
+                        System.out.println("Client " + getAddressStr(client.getSocketAddress()) + " logout");
                         iterator.remove();
                     }
                 }
@@ -111,31 +116,11 @@ public class Server {
         }
     }
 
-    private class UDPReceiveLoopThread extends Thread {
-        @Override
-        public void run() {
-            while (!stop) {
-                byte[] inBuff = new byte[Message.UDP_MSG_IN_BUFF_LEN];
-                DatagramPacket packet = new DatagramPacket(inBuff, inBuff.length);
-                try {
-                    server.receive(packet);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                    stop = true;
-                    break;
-                }
-                String inDataStr = new String(packet.getData());
-                Message msg = Message.msgUnpack(inDataStr);
-                if (msg == null) {
-                    System.out.println("Invalid message from Client " + ClientInfo.getAddressStr(packet.getSocketAddress()) + ":" + inDataStr);
-                    continue;
-                }
-                onMessage(packet.getSocketAddress(), msg);
-            }
-        }
+    public String getAddressStr(SocketAddress address) {
+        return address.toString().substring(1);
     }
 
-    private static class ClientInfo {
+    private class ClientInfo {
         private final SocketAddress socketAddress;
 
         private Date lastConnectDate;
@@ -155,10 +140,6 @@ public class Server {
 
         public SocketAddress getSocketAddress() {
             return socketAddress;
-        }
-
-        public static String getAddressStr(SocketAddress address) {
-            return address.toString().substring(1);
         }
     }
 

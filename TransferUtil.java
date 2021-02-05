@@ -1,3 +1,5 @@
+import com.sun.istack.internal.NotNull;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -12,12 +14,8 @@ import java.net.SocketAddress;
  */
 public class TransferUtil {
 
-    public static void udpSendText(DatagramSocket sock, SocketAddress address, Message.MessageType type, String text) {
+    public static void udpSendMsg(DatagramSocket socket, SocketAddress address, Message.MessageType type, String text) {
         Message msg = new Message(text, type);
-        udpSendMsg(sock, address, msg);
-    }
-
-    public static void udpSendMsg(DatagramSocket socket, SocketAddress address, Message msg) {
         byte[] buff = msg.toString().getBytes();
         DatagramPacket packet = new DatagramPacket(buff, buff.length, address);
         try {

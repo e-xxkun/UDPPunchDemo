@@ -24,7 +24,7 @@ public class Message {
         if (pSplit.length >= 2) {
             String header = pSplit[0];
             if (MSG_HEADER.equals(header)) {
-                MessageType type = MessageType.create(pSplit[1]);
+                MessageType type = MessageType.create(Integer.parseInt(pSplit[1]));
                 String body = null;
                 if (pSplit.length > 2) {
                     body = pSplit[2];
@@ -49,33 +49,42 @@ public class Message {
     }
 
     public enum MessageType {
-        MSGT_LOGIN("LOGIN"),
-        MSGT_LOGOUT("LOGOUT"),
-        MSGT_LIST("LIST"),
-        MSGT_PUNCH("PUNCH"),
-        MSGT_HEARTBEAT("HEARTBEAT"),
-        MSGT_REPLY("REPLY"),
-        MSGT_TEXT("TEXT"),
-        MSGT_UNKNOWN("UNKNOWN");
 
-        String code;
+        MSGT_LOGIN(0),
+        MSGT_LOGOUT(1),
+        MSGT_LIST(2),
+        MSGT_PUNCH(3),
+        MSGT_HEARTBEAT(4),
+        MSGT_REPLY(5),
+        MSGT_TEXT(6),
+        MSGT_UNKNOWN(7),
 
-        MessageType(String code) {
+
+        NPT_FULL_CONE_NAT(8),
+        NPT_FULL_OR_RESTRICTED_CONE_NAT(9),
+        NPT_SYMMETRIC_NAT(10),
+        NPT_START(11),
+        NPT_STEP_1(12),
+        NPT_STEP_2(13),
+        NPT_STEP_3(14);
+
+        int code;
+
+        MessageType(int code) {
             this.code = code;
         }
 
-        public String getCode() {
+        public int getCode() {
             return code;
         }
 
-        public static MessageType create(String val) {
+        public static MessageType create(int val) {
             MessageType[] types = MessageType.values();
-            for (MessageType type : types) {
-                if (type.getCode().equals(val)) {
-                    return type;
-                }
+            if (val < types.length && val > -1) {
+                return types[val];
+            } else {
+                return MSGT_UNKNOWN;
             }
-            return MSGT_UNKNOWN;
         }
     }
 }
