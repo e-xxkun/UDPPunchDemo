@@ -5,6 +5,7 @@ import java.net.DatagramSocket;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Scanner;
 
@@ -17,10 +18,12 @@ import java.util.Scanner;
 
 public class Client {
 
+    private static final long HEARTBEAT_INTERVAL = 10 * 1000;
     private Map<String, SocketAddress> clientList;
     private SocketAddress server;
     private DatagramSocket local;
     private boolean quit = false;
+    private HeartbeatThread heartbeat;
 
     public void start(String address) {
         server = TransferUtil.getSocketAddressFromString(address);
@@ -32,6 +35,7 @@ public class Client {
             e.printStackTrace();
             return;
         }
+        heartbeat = new HeartbeatThread();
         new ReceiveThread().start();
         new ConsoleThread().start();
     }
@@ -48,8 +52,11 @@ public class Client {
                 case MSGT_REPLY:
                     System.out.println("Server " + server + ": " + msg.getBody());
                     break;
-                case MSGT_HEARTBEAT:
-                    TransferUtil.udpSendText(local, from, Message.MessageType.MSGT_HEARTBEAT, null);
+                case MSGT_LOGIN:
+                    System.out.println("Login success!");
+                    if (!heartbeat.isAlive()) {
+                        heartbeat.start();
+                    }
                     break;
             }
             return;
@@ -70,7 +77,7 @@ public class Client {
                 break;
         }
     }
-    
+
     public class ReceiveThread extends Thread {
         @Override
         public void run() {
@@ -112,6 +119,7 @@ public class Client {
                         break;
                     case "logout":
                         TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_LOGOUT, null);
+                        heartbeat.close();
                         break;
                     case "send":
                         if (cmd.length > 2) {
@@ -145,6 +153,27 @@ public class Client {
                         System.out.println("Unknown command");
                 }
             }
+        }
+    }
+
+    private class HeartbeatThread extends Thread {
+        private boolean stop =  false;
+        @Override
+        public void run() {
+            while (!quit && !stop) {
+                try {
+                    sleep(HEARTBEAT_INTERVAL);
+                    TransferUtil.udpSendText(local, server, Message.MessageType.MSGT_HEARTBEAT, null);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    quit = true;
+                    break;
+                }
+            }
+        }
+
+        public void close() {
+            stop = true;
         }
     }
 

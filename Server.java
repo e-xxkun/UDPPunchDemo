@@ -3,6 +3,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketAddress;
 import java.net.SocketException;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -16,7 +17,7 @@ import java.util.stream.Collectors;
  */
 public class Server {
 
-    private final int HEARTBEAT_INTERVAL = 10 * 1000;   // Heartbeat interval (ms)
+    private static final long HEARTBEAT_INTERVAL = 10 * 1000;   // Heartbeat interval (ms)
 
     private Map<String, ClientInfo> clientPool;
     private boolean stop = false;
@@ -42,7 +43,7 @@ public class Server {
                 if (!clientPool.containsKey(ClientInfo.getAddressStr(from))) {
                     clientPool.put(ClientInfo.getAddressStr(from), new ClientInfo(from));
                     System.out.println("Client " + ClientInfo.getAddressStr(from) + " logged in");
-                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Login success!");
+                    TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_LOGIN, null);
                 } else {
                     System.out.println("Client " + ClientInfo.getAddressStr(from) + " failed to login");
                     TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Login failed");
@@ -74,8 +75,11 @@ public class Server {
                 TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_TEXT, "punch request sent");
                 break;
             case MSGT_HEARTBEAT:
-                clientPool.get(ClientInfo.getAddressStr(from)).setAlive(true);
-                System.out.println("Client " + ClientInfo.getAddressStr(from) + " alive");
+                ClientInfo client = clientPool.get(ClientInfo.getAddressStr(from));
+                if (client != null) {
+                    client.setLastConnectDate(new Date());
+                    System.out.println("Client " + ClientInfo.getAddressStr(from) + " alive");
+                }
                 break;
             default:
                 TransferUtil.udpSendText(server, from, Message.MessageType.MSGT_REPLY, "Unknown command");
@@ -95,12 +99,10 @@ public class Server {
                     break;
                 }
                 Iterator<ClientInfo> iterator = clientPool.values().iterator();
+                Date now = new Date();
                 while (iterator.hasNext()) {
                     ClientInfo client = iterator.next();
-                    if (client.isAlive()) {
-                        TransferUtil.udpSendText(server, client.getSocketAddress(), Message.MessageType.MSGT_HEARTBEAT, null);
-                        client.setAlive(false);
-                    } else {
+                    if (now.getTime() - client.getLastConnectDate().getTime() > HEARTBEAT_INTERVAL) {
                         System.out.println("Client " + ClientInfo.getAddressStr(client.getSocketAddress()) + " logout");
                         iterator.remove();
                     }
@@ -135,23 +137,24 @@ public class Server {
 
     private static class ClientInfo {
         private final SocketAddress socketAddress;
-        private boolean alive;
+
+        private Date lastConnectDate;
 
         public ClientInfo(SocketAddress address) {
             socketAddress = address;
-            alive = true;
+            lastConnectDate = new Date();
+        }
+
+        public void setLastConnectDate(Date lastConnectDate) {
+            this.lastConnectDate = lastConnectDate;
+        }
+
+        public Date getLastConnectDate() {
+            return lastConnectDate;
         }
 
         public SocketAddress getSocketAddress() {
             return socketAddress;
-        }
-
-        public boolean isAlive() {
-            return alive;
-        }
-
-        public void setAlive(boolean alive) {
-            this.alive = alive;
         }
 
         public static String getAddressStr(SocketAddress address) {
