@@ -1,5 +1,3 @@
-import java.io.IOException;
-import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketAddress;
 import java.net.SocketException;
@@ -15,28 +13,30 @@ import java.util.stream.Collectors;
  * @description: relay server
  * @date 2021-01-30 10:23
  */
-public class Server implements UDPReceiveLoopThread.Status {
+public class Server {
 
     private static final long HEARTBEAT_INTERVAL = 10 * 1000;   // Heartbeat interval (ms)
 
     private Map<String, ClientInfo> clientPool;
-    private boolean stop = false;
     private DatagramSocket server;
+
+    private HeartbeatThread heartbeatThread;
 
     public void start(int port) {
         clientPool = new HashMap<>();
         try {
             server = new DatagramSocket(port);
             System.out.println("Server start on " + server.getLocalSocketAddress());
-            new UDPReceiveLoopThread(server, this).start();
-            new HeartbeatThread().start();
         } catch (SocketException e) {
             e.printStackTrace();
-            stop = true;
+            return;
         }
+        new UDPReceiveLoopThread(server, this::onMessage).start();
+        heartbeatThread = new HeartbeatThread();
+        heartbeatThread.start();
     }
 
-    public void onMessage(SocketAddress from, Message msg) {
+    private void onMessage(SocketAddress from, Message msg) {
 //        System.out.println("RECV FROM Client " + getAddressStr(from) + ":" + msg.getType().getCode() + " -> " + msg.getBody().trim());
         switch (msg.getType()) {
             case MSGT_LOGIN:
@@ -87,20 +87,20 @@ public class Server implements UDPReceiveLoopThread.Status {
         }
     }
 
-    @Override
-    public boolean isStop() {
-        return stop;
+    public void stop() {
+        if (heartbeatThread.isAlive()) {
+            heartbeatThread.interrupt();
+        }
+        server.close();
     }
 
     private class HeartbeatThread extends Thread {
         @Override
         public void run() {
-            while (!stop) {
+            while (true) {
                 try {
                     sleep(HEARTBEAT_INTERVAL);
                 } catch (InterruptedException e) {
-                    e.printStackTrace();
-                    stop = true;
                     break;
                 }
                 Iterator<ClientInfo> iterator = clientPool.values().iterator();
@@ -120,7 +120,7 @@ public class Server implements UDPReceiveLoopThread.Status {
         return address.toString().substring(1);
     }
 
-    private class ClientInfo {
+    private static class ClientInfo {
         private final SocketAddress socketAddress;
 
         private Date lastConnectDate;

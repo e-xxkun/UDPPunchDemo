@@ -60,13 +60,11 @@ public class Message {
         MSGT_UNKNOWN(7),
 
 
-        NPT_FULL_CONE_NAT(8),
-        NPT_FULL_OR_RESTRICTED_CONE_NAT(9),
-        NPT_SYMMETRIC_NAT(10),
-        NPT_START(11),
-        NPT_STEP_1(12),
-        NPT_STEP_2(13),
-        NPT_STEP_3(14);
+        NPT_FULL_OR_RESTRICTED_CONE_NAT(8),
+        NPT_SYMMETRIC_NAT(9),
+        NPT_START(10),
+        NPT_STEP_1(11),
+        NPT_STEP_2(12);
 
         int code;
 
@@ -80,11 +78,12 @@ public class Message {
 
         public static MessageType create(int val) {
             MessageType[] types = MessageType.values();
-            if (val < types.length && val > -1) {
-                return types[val];
-            } else {
-                return MSGT_UNKNOWN;
+            for (MessageType type : types) {
+                if (type.getCode() == val) {
+                    return type;
+                }
             }
+            return MSGT_UNKNOWN;
         }
     }
 }

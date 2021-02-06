@@ -1,6 +1,3 @@
-import java.io.IOException;
-
-import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketAddress;
 import java.net.SocketException;
@@ -15,13 +12,12 @@ import java.util.Scanner;
  * @date 2021-01-30 20:02
  */
 
-public class Client implements UDPReceiveLoopThread.Status {
+public class Client {
 
     private static final long HEARTBEAT_INTERVAL = 10 * 1000;
     private Map<String, SocketAddress> clientList;
     private SocketAddress server;
     private DatagramSocket local;
-    private boolean quit = false;
     private HeartbeatThread heartbeat;
 
     public void start(String address) {
@@ -35,11 +31,11 @@ public class Client implements UDPReceiveLoopThread.Status {
             return;
         }
         heartbeat = new HeartbeatThread();
-        new UDPReceiveLoopThread(local, this).start();
+        new UDPReceiveLoopThread(local, this::onMessage).start();
         new ConsoleThread().start();
     }
 
-    public void onMessage(SocketAddress from, Message msg) {
+    private void onMessage(SocketAddress from, Message msg) {
 //        System.out.println("RECV FROM Client " + from + ":" + msg.getType().getCode() + " -> " + msg.getBody());
         if (server.toString().equals(from.toString())) {
             switch (msg.getType()) {
@@ -77,16 +73,18 @@ public class Client implements UDPReceiveLoopThread.Status {
         }
     }
 
-    @Override
-    public boolean isStop() {
-        return quit;
+    private void stop() {
+        if (heartbeat.isAlive()) {
+            heartbeat.interrupt();
+        }
+        local.close();
     }
 
     public class ConsoleThread extends Thread {
         @Override
         public void run() {
             Scanner scanner = new Scanner(System.in);
-            while (!quit) {
+            while (true) {
                 String[] cmd = scanner.nextLine().split(" ");
                 switch (cmd[0]) {
                     case "list":
@@ -100,7 +98,7 @@ public class Client implements UDPReceiveLoopThread.Status {
                         break;
                     case "logout":
                         TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LOGOUT, null);
-                        heartbeat.close();
+                        heartbeat.interrupt();
                         break;
                     case "send":
                         if (cmd.length > 2) {
@@ -125,8 +123,8 @@ public class Client implements UDPReceiveLoopThread.Status {
                         break;
                     case "quit":
                         TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_LOGOUT, null);
-                        quit = true;
-                        break;
+                        Client.this.stop();
+                        return;
                     case "help":
                         print_help();
                         break;
@@ -138,23 +136,17 @@ public class Client implements UDPReceiveLoopThread.Status {
     }
 
     private class HeartbeatThread extends Thread {
-        private boolean stop =  false;
         @Override
         public void run() {
-            while (!quit && !stop) {
+            while (true) {
                 try {
                     sleep(HEARTBEAT_INTERVAL);
                     TransferUtil.udpSendMsg(local, server, Message.MessageType.MSGT_HEARTBEAT, null);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
-                    quit = true;
                     break;
                 }
             }
-        }
-
-        public void close() {
-            stop = true;
         }
     }
 

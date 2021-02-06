@@ -11,22 +11,22 @@ import java.net.SocketAddress;
  */
 public class UDPReceiveLoopThread extends Thread {
     private final DatagramSocket socket;
-    private final Status status;
+    private final OnMessage onMessage;
 
-    public UDPReceiveLoopThread(DatagramSocket socket, Status status) {
+    public UDPReceiveLoopThread(DatagramSocket socket, OnMessage onMessage) {
         this.socket = socket;
-        this.status = status;
+        this.onMessage = onMessage;
     }
 
     @Override
     public void run() {
-        while (!status.isStop()) {
+        while (true) {
             byte[] inBuff = new byte[Message.UDP_MSG_IN_BUFF_LEN];
             DatagramPacket packet = new DatagramPacket(inBuff, inBuff.length);
             try {
                 socket.receive(packet);
             } catch (IOException e) {
-                e.printStackTrace();
+//                e.printStackTrace();
                 break;
             }
             String inDataStr = new String(packet.getData());
@@ -35,13 +35,11 @@ public class UDPReceiveLoopThread extends Thread {
                 System.out.println("Invalid message from " + packet.getSocketAddress() + ":" + inDataStr);
                 continue;
             }
-            status.onMessage(packet.getSocketAddress(), msg);
+            onMessage.onMessage(packet.getSocketAddress(), msg);
         }
     }
 
-    public interface Status {
+    public interface OnMessage {
         void onMessage(SocketAddress from, Message msg);
-
-        boolean isStop();
     }
 }

@@ -1,5 +1,3 @@
-import com.sun.istack.internal.NotNull;
-
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -25,7 +23,7 @@ public class TransferUtil {
         }
     }
 
-    public static SocketAddress getSocketAddressFromString(String body) {
+    public static InetSocketAddress getSocketAddressFromString(String body) {
         String[] pSplit = body.split(":");
         if (pSplit.length == 2) {
             String host = pSplit[0];

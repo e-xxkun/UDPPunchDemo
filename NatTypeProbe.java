@@ -1,4 +1,5 @@
 import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.net.SocketException;
 
@@ -8,41 +9,55 @@ import java.net.SocketException;
  * @description: Net type probe
  * @date 2021-02-05 11:56
  */
-public class NatTypeProbe implements UDPReceiveLoopThread.Status {
+public class NatTypeProbe {
+
+    private final static long WAIT_TIME = 2 * 1000;
 
     private DatagramSocket local;
-    private DatagramSocket local2;
-    private SocketAddress server;
-    private boolean stop = false;
+
+    private WaitThread prcnWaitTread;
+    private WaitThread connWaitTread;
 
     public void start(String address) {
-        server = TransferUtil.getSocketAddressFromString(address);
         try {
             local = new DatagramSocket();
-            local2 = new DatagramSocket();
-            new UDPReceiveLoopThread(local, this).start();
-            new UDPReceiveLoopThread(local2, this).start();
-            TransferUtil.udpSendMsg(local, server, Message.MessageType.NPT_START, null);
         } catch (SocketException e) {
             e.printStackTrace();
-            stop = true;
+            return;
         }
+        prcnWaitTread = new WaitThread("Port restricted cone Nat");
+        connWaitTread = new WaitThread("Connect Fail");
+        new UDPReceiveLoopThread(local, this::onMessage).start();
+        SocketAddress server = TransferUtil.getSocketAddressFromString(address);
+        TransferUtil.udpSendMsg(local, server, Message.MessageType.NPT_START, null);
+        connWaitTread.start();
     }
 
-    public void onMessage(SocketAddress from, Message msg) {
-//        System.out.println("RECV FROM Client " + ClientInfo.getAddressStr(from) + ":" + msg.getType().getCode() + " -> " + msg.getBody().trim());
+    private void onMessage(SocketAddress from, Message msg) {
+//        System.out.println("RECV FROM Client " + from + ": " + msg.getType().getCode() + " -> " + msg.getBody().trim());
         switch (msg.getType()) {
             case NPT_STEP_1:
+                connWaitTread.interrupt();
+                String[] pSplit = msg.getBody().split(NatTypeProbeServer.NPT_SPLIT);
+                if (pSplit.length == 2) {
+                    String host = ((InetSocketAddress)from).getHostString();
+                    int port = Integer.parseInt(pSplit[1]);
+                    SocketAddress server2 = new InetSocketAddress(host, port);
+                    TransferUtil.udpSendMsg(local, server2, Message.MessageType.NPT_STEP_1, pSplit[0]);
+                }
                 break;
             case NPT_STEP_2:
-                break;
-            case NPT_STEP_3:
+                prcnWaitTread.start();
                 break;
             case NPT_SYMMETRIC_NAT:
-                break;
-            case NPT_FULL_CONE_NAT:
+                System.out.println("Symmetric Nat");
+                stop();
                 break;
             case NPT_FULL_OR_RESTRICTED_CONE_NAT:
+                prcnWaitTread.close();
+                prcnWaitTread.interrupt();
+                System.out.println("Full Nat OR Restricted cone Nat");
+                stop();
                 break;
             default:
                 System.out.println("Unknown message: " + msg.toString());
@@ -50,12 +65,49 @@ public class NatTypeProbe implements UDPReceiveLoopThread.Status {
         }
     }
 
-    @Override
-    public boolean isStop() {
-        return stop;
+    public void stop() {
+        if (prcnWaitTread.isAlive()) {
+            prcnWaitTread.interrupt();
+        }
+        if (connWaitTread.isAlive()) {
+            connWaitTread.interrupt();
+        }
+        local.close();
     }
 
-    public static void main(String[] args) {
+    public class WaitThread extends Thread {
 
+        private final String natType;
+        private boolean stop = false;
+
+        public WaitThread(String natType) {
+            this.natType = natType;
+        }
+
+        public void close() {
+            stop = true;
+        }
+
+        @Override
+        public void run() {
+            if (!stop) {
+                try {
+                    sleep(WAIT_TIME);
+                    System.out.println(natType);
+                    NatTypeProbe.this.stop();
+                } catch (InterruptedException ignored) {
+
+                }
+            }
+        }
+    }
+
+
+    public static void main(String[] args) {
+        if (args.length != 1) {
+            System.out.println("Usage: java " + Server.class.getName() + " <host>:<port>\n");
+            return;
+        }
+        new NatTypeProbe().start(args[0]);
     }
 }
